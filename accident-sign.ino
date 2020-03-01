@@ -5,25 +5,23 @@
 */
 
 
-/* TODO
-  - use an RTC, for not using NTP sync upon boot
-*/
-
 #include <ETH.h>    // ESP32 ethernet
 #include <Preferences.h>
 #include <ezTime.h>
 #include <HardwareSerial.h>
 #include <AlphaFive-Control.h>
+#include <Wire.h>   // i2c
+#include <RTClib.h> // i2c addr 0x68
 
 /* Local variables */
 static bool USE_WIFI = false;
-const char* ssid = "Chateau 64th - Guests";
+const char* ssid = "SFMIX";
 const char* pass = "notmypass";
 
 #define HOSTNAME "sfmix-clock"
-String LOCAL_NTP_SERVER = "100.64.42.1";
 
-#define PIR_DOUT 2
+RTC_DS3231 rtc;
+#define PIR_DOUT 14
 HardwareSerial ESPSerial(1);
 AlphaClockFive FirstClock(&ESPSerial);
 time_t EventDate = 1573673520;
@@ -85,19 +83,44 @@ void setup()
   }
 
   FirstClock.clear();
- 
-  setServer(LOCAL_NTP_SERVER);
+
   setDebug(INFO);
   
   // waitForSync(15);
+
+  rtc.begin();
+  Serial.print("RTC Temperature: ");
+  Serial.print(rtc.getTemperature());
+  Serial.println(" °C");
+  
+  DateTime RTCnow = rtc.now();
+  Serial.print("RTC boot value: ");
+  time_t RTCnow_t = RTCnow.unixtime();
+  Serial.println(RTCnow_t);
+
+  if ( RTCnow_t > compileTime() )
+  {
+    Serial.println("RTC seems reasonable, > compiled time");
+  } else {
+    Serial.println("RTC out of sync");
+  }
+
 }
 
 void loop()
 {
-  events(); // ezTime logging
-
   unsigned long epoch;
   epoch = UTC.now();
+  
+  if ( eth_connected ) 
+  {
+    events();
+    epoch = UTC.now();
+  } else {
+    DateTime RTCnow = rtc.now();
+    epoch = RTCnow.unixtime();
+  }
+ 
   int days_since = (epoch - EventDate) / 86400;
   sprintf(padded_days_since, "%05d", days_since);
 
@@ -111,7 +134,7 @@ void loop()
     delay(500);
   } else {
     FirstClock.clear();
-    // Serial.println("No motion");
+    //Serial.println("No motion");
   }
 
   delay(500);
