@@ -5,23 +5,20 @@
 */
 
 
+/* Load libaries */
 #include <ETH.h>    // ESP32 ethernet
 #include <Preferences.h>
 #include <ezTime.h>
 #include <HardwareSerial.h>
 #include <AlphaFive-Control.h>
-#include <Wire.h>   // i2c
+#include <Wire.h>
 #include <RTClib.h> // i2c addr 0x68
 
 /* Local variables */
-static bool USE_WIFI = false;
-const char* ssid = "SFMIX";
-const char* pass = "notmypass";
-
 #define HOSTNAME "sfmix-clock"
 
 RTC_DS3231 rtc;
-#define PIR_DOUT 14
+#define PIR_DOUT 36
 HardwareSerial ESPSerial(1);
 AlphaClockFive FirstClock(&ESPSerial);
 time_t EventDate = 1573673520;
@@ -34,6 +31,10 @@ int ProgressBootCounter = 0;
 
 void setup()
 {
+  pinMode(PIR_DOUT, INPUT);
+  ESPSerial.begin(19200, SERIAL_8N1, 13, 12);
+  FirstClock.writeWord("BOOT");
+  
   Serial.begin(115200);
   Serial.setDebugOutput(true);
 
@@ -48,29 +49,37 @@ void setup()
   Serial.print("ESP32 SDK: ");
   Serial.println(ESP.getSdkVersion());
 
-  Serial.print("ESP date: ");
+  Serial.print("ESP current date: ");
   Serial.println(UTC.dateTime());
 
-  pinMode(PIR_DOUT, INPUT);
-  ESPSerial.begin(19200, SERIAL_8N1, 13, 12);
-  FirstClock.writeWord("BOOT");
-  
+  rtc.begin();
+  if ( rtc.getTemperature() > 65 )
+  {
+    Serial.println("RTC doesn't seem connected");
+  } else {
+    Serial.print("RTC Temperature: ");
+    Serial.print(rtc.getTemperature());
+    Serial.println(" °C");
+
+    DateTime RTCnow = rtc.now();
+    Serial.print("RTC boot value: ");
+    time_t RTCnow_t = RTCnow.unixtime();
+    Serial.println(RTCnow_t);
+
+    if ( RTCnow_t > compileTime() )
+    {
+      Serial.println("RTC seems reasonable, > compiled time");
+    } else {
+      Serial.println("RTC out of sync");
+    }    
+  }
+   
+  FirstClock.writeWord("DHCP");  
   WiFi.setHostname(HOSTNAME); // DHCP client hostname
   WiFi.onEvent(WiFiEvent);
   btStop();
+  ETH.begin();
 
-  if (USE_WIFI) {
-    WiFi.begin(ssid, pass);
-
-    while (WiFi.status() != WL_CONNECTED) {
-      delay(500);
-      Serial.print(".");
-    }
-  } else if (!USE_WIFI) {
-    ETH.begin();
-  }
-
-  FirstClock.writeWord("NET");
   while ( !eth_connected ) {
     delay ( 1000 );
     Serial.print ( "." );
@@ -82,45 +91,15 @@ void setup()
     ProgressBootCounter = ProgressBootCounter + 1;
   }
 
-  FirstClock.clear();
-
   setDebug(INFO);
-  
-  // waitForSync(15);
-
-  rtc.begin();
-  Serial.print("RTC Temperature: ");
-  Serial.print(rtc.getTemperature());
-  Serial.println(" °C");
-  
-  DateTime RTCnow = rtc.now();
-  Serial.print("RTC boot value: ");
-  time_t RTCnow_t = RTCnow.unixtime();
-  Serial.println(RTCnow_t);
-
-  if ( RTCnow_t > compileTime() )
-  {
-    Serial.println("RTC seems reasonable, > compiled time");
-  } else {
-    Serial.println("RTC out of sync");
-  }
-
+  events(); // log ezTime events
+  rtc.adjust(UTC.now());
 }
 
 void loop()
 {
   unsigned long epoch;
   epoch = UTC.now();
-  
-  if ( eth_connected ) 
-  {
-    events();
-    epoch = UTC.now();
-  } else {
-    DateTime RTCnow = rtc.now();
-    epoch = RTCnow.unixtime();
-  }
- 
   int days_since = (epoch - EventDate) / 86400;
   sprintf(padded_days_since, "%05d", days_since);
 
@@ -134,11 +113,35 @@ void loop()
     delay(500);
   } else {
     FirstClock.clear();
-    //Serial.println("No motion");
+    // Serial.println("No motion");
+    delay(500);
   }
 
   delay(500);
+
+  if ( eth_connected ) 
+  {
+    Serial.print("Setting RTC time: ");
+    Serial.println(UTC.dateTime());
+    rtc.adjust(UTC.now());
+  }
 }
+
+void bringupnetwork()
+{
+  
+  // waitForSync(25);
+  
+  FirstClock.writeWord(" NTP ");
+  Serial.print("NTP date: ");
+  Serial.println(UTC.dateTime());
+
+  Serial.print("Setting RTC time: ");
+  FirstClock.writeWord("RTCSY");
+  Serial.println(UTC.dateTime());
+  rtc.adjust(UTC.now());
+}
+
 
 boolean readMotionSensor()
 {
